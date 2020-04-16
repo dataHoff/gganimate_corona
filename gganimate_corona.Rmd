@@ -1,0 +1,163 @@
+
+Setup
+```{r}
+if (!require("devtools")) install.packages("devtools") ; library(devtools)
+if (!require("coronavirus")) install_github("covid19r/coronavirus"); library(coronavirus)
+if (!require("tidyverse")) install.packages("tidyverse"); library(tidyverse)
+if (!require("readr")) install.packages("tidyverse"); library(readr)
+if (!require("gganimate")) install.packages("gganimate"); library(gganimate)
+if (!require("gifski")) install.packages("gifski"); library(gifski)
+if (!require("png")) install.packages("png"); library(png) 
+if (!require("RcppRoll")) install.packages("RcppRoll"); library(RcppRoll) 
+
+# themeset voor ggplot
+theme_set(theme_bw())
+```
+
+Datasets inladen
+```{r message=FALSE, warning=FALSE}
+rivm_NL_covid19_province <-
+read_csv("https://raw.githubusercontent.com/J535D165/CoronaWatchNL/master/data/rivm_NL_covid19_province.csv")
+
+
+# van de website: https://opendata.cbs.nl/statline/#/CBS/nl/dataset/70072ned/table?ts=1586933022433
+Regionale_kerncijfers_Nederland_15042020_091711 <- 
+read_delim("data/Regionale_kerncijfers_Nederland_15042020_091711.csv",";", escape_double = FALSE, trim_ws = TRUE, skip = 3)
+```
+
+Opschonen dataset Regionale_kerncijfers_Nederland
+```{r}
+left <-
+Regionale_kerncijfers_Nederland_15042020_091711 %>% 
+  select(starts_with("X")) %>% 
+  set_names(.[1, ]) %>%
+  slice(-1) %>% slice(-13) %>% 
+  mutate(id = row_number())
+right <-
+Regionale_kerncijfers_Nederland_15042020_091711 %>% 
+  select(-starts_with("X")) %>% 
+  slice(-1) %>% slice(-13) %>% 
+  mutate(id = row_number())
+
+
+Regionale_kerncijfers_Nederland <- full_join(left,right) 
+  
+Regionale_kerncijfers_Nederland <-
+  Regionale_kerncijfers_Nederland %>% 
+  mutate(Provincienaam = str_remove(`Regio's`,".(PV.)")) %>% 
+  mutate(Provincienaam = str_trim(Provincienaam))
+
+```
+
+Join RIVM data met CBS 
+```{r}
+
+Provincie <-
+rivm_NL_covid19_province %>%
+  left_join(Regionale_kerncijfers_Nederland) %>% 
+  #hernoemen kolommen
+  select(Datum, Provincie = Provincienaam, Besmettingen = Aantal, 
+         TotaleBevolking = `Bevolking|Bevolkingssamenstelling op 1 januari|Totale bevolking`,
+         Leeftijd65tot80 = `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen|65 tot 80 jaar`,
+         Leeftijd80ofOuder = `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen|80 jaar of ouder`,
+         Leeftijd65tot80Relatief = `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen, relatief|65 tot 80 jaar`,
+         Leeftijd80ofOuderRelatief= `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen, relatief|80 jaar of ouder`,
+         Bevolkingsdichtheid = `Bevolking|Bevolkingssamenstelling op 1 januari|Bevolkingsdichtheid`) 
+```
+
+Bewerkingen dataset:
+1. Besmettingen per dag
+2. Gebruik dagen ipv datums
+3. Bereken besmettingen per km2
+4. Bereken 7-daags voortschrijdend gemiddelde
+5. filter vanaf de lockdown en nummer de dagen
+```{r}
+
+ProvincieLockdown <-
+Provincie %>% 
+  filter(Provincie != is.na(Provincie)) %>% 
+  group_by(Provincie) %>% 
+  #1. Besmettingen per dag
+   mutate(BesmettingenPerDag = case_when(is.na(Besmettingen - lag(Besmettingen)) ~ Besmettingen,
+                                        TRUE ~ Besmettingen - lag(Besmettingen))) %>% 
+  ungroup() %>% 
+  # uiteindelijk gebruik ik geen leeftijden
+  mutate(Leeftijd65tot80Relatief = str_replace(Leeftijd65tot80Relatief,",","."),
+         Leeftijd80ofOuderRelatief = str_replace(Leeftijd80ofOuderRelatief,",","."),
+         Leeftijd65tot80Relatief = as.double(Leeftijd65tot80Relatief),
+         Leeftijd80ofOuderRelatief = as.double(Leeftijd80ofOuderRelatief),
+         Provincie = as.factor(Provincie)) %>% 
+  mutate_if(is.character, as.numeric) %>% 
+  # 2. Gebruik dagen ipv datums
+  arrange(Datum) %>% 
+  group_by(Provincie) %>% 
+  mutate(Dag = row_number()) %>% 
+  ungroup() %>% 
+  # 3. Bereken besmettingen per km2
+  group_by(Provincie,Dag) %>% 
+  mutate(BesmettingenPerKm2 = BesmettingenPerDag / (Bevolkingsdichtheid/100),
+         BesmettingenPerKm2 = as.integer(format(BesmettingenPerKm2, scientific = FALSE))) %>% 
+  ungroup() %>% 
+  # 4. Bereken 7-daags voortschrijdend gemiddelde
+  group_by(Provincie) %>% 
+  mutate(BesmettingenPerKm2_mva7 = roll_mean(BesmettingenPerKm2, 7, align="right", fill=0)) %>% 
+  ungroup() %>% 
+  # 5. filter vanaf de lockdown en nummer de dagen
+  arrange(Datum) %>% 
+  filter(Datum >= "2020-03-23") %>% 
+  group_by(Provincie) %>% 
+  mutate(DagLockdown = row_number()) %>% 
+  ungroup() %>% 
+  # order de factors zodat deze descending zijn op BesmettingenPerKm2 in de plot
+  mutate(Provincie = fct_reorder(Provincie, desc(BesmettingenPerKm2))) %>% 
+select(Datum,Dag,DagLockdown,Provincie,Besmettingen,BesmettingenPerDag,BesmettingenPerKm2,BesmettingenPerKm2_mva7,Bevolkingsdichtheid)
+
+```
+
+Maak de gganimate plot
+```{r}
+ProvincieLockdownChart <-
+ProvincieLockdown %>% 
+  ggplot(aes(DagLockdown,BesmettingenPerKm2_mva7, color = Bevolkingsdichtheid, group = 1)) +  
+  scale_y_sqrt() +
+  geom_line() + 
+  geom_point() +
+  facet_wrap(~Provincie) +
+  scale_color_gradient2(midpoint = 750,low="green", 
+                        mid="orange",
+                        high="red") +
+  transition_reveal(along = DagLockdown) + ease_aes('cubic-in-out') +
+  labs(title = "Positief gesteste personen op Covid-19 afgezet tegen het 
+       aantal dagen ({frame_along}) sinds de intelligente lockdown op 23 maart",
+       subtitle = "7-daags moving average gecorrigeerd voor de bevolkingsdichtheid per provincie", 
+       x = "dagen",
+       y = "positief geteste personen per km2")
+
+# maak de animatie
+animate(ProvincieLockdownChart, fps = 10, end_pause = 20)
+
+# Save gganimate plot
+anim_save("plots/ProvincieLockdownChart.gif")
+```
+
+Maak de statische plot
+```{r}
+ProvincieLockdown %>% 
+  ggplot(aes(DagLockdown,BesmettingenPerKm2_mva7, color = Bevolkingsdichtheid, group = 1)) +  
+  scale_y_sqrt() +
+  geom_line() + 
+  #geom_point() +
+  facet_wrap(~Provincie) +
+  scale_color_gradient2(midpoint = 750,low="green", 
+                        mid="orange",
+                        high="red") +
+  labs(title = "Positief gesteste personen op Covid-19 afgezet tegen
+       het aantal dagen sinds de intelligente lockdown op 23 maart",
+       subtitle = "7-daags moving average gecorrigeerd voor de bevolkingsdichtheid per provincie", 
+       x = "dagen",
+       y = "positief geteste personen per km2") 
+
+# Save statische plot
+ggsave("plots/ProvincieLockdownLineplot.png")
+```
+
