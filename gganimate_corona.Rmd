@@ -58,17 +58,13 @@ rivm_NL_covid19_province %>%
   #hernoemen kolommen
   select(Datum, Provincie = Provincienaam, Besmettingen = Aantal, 
          TotaleBevolking = `Bevolking|Bevolkingssamenstelling op 1 januari|Totale bevolking`,
-         Leeftijd65tot80 = `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen|65 tot 80 jaar`,
-         Leeftijd80ofOuder = `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen|80 jaar of ouder`,
-         Leeftijd65tot80Relatief = `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen, relatief|65 tot 80 jaar`,
-         Leeftijd80ofOuderRelatief= `Bevolking|Bevolkingssamenstelling op 1 januari|Leeftijd|Leeftijdsgroepen, relatief|80 jaar of ouder`,
          Bevolkingsdichtheid = `Bevolking|Bevolkingssamenstelling op 1 januari|Bevolkingsdichtheid`) 
 ```
 
 Bewerkingen dataset:
 1. Besmettingen per dag
 2. Gebruik dagen ipv datums
-3. Bereken besmettingen per km2
+3. Bereken besmettingen per miljoen inwoners
 4. Bereken 7-daags voortschrijdend gemiddelde
 5. filter vanaf de lockdown en nummer de dagen
 ```{r}
@@ -81,26 +77,23 @@ Provincie %>%
    mutate(BesmettingenPerDag = case_when(is.na(Besmettingen - lag(Besmettingen)) ~ Besmettingen,
                                         TRUE ~ Besmettingen - lag(Besmettingen))) %>% 
   ungroup() %>% 
-  # uiteindelijk gebruik ik geen leeftijden
-  mutate(Leeftijd65tot80Relatief = str_replace(Leeftijd65tot80Relatief,",","."),
-         Leeftijd80ofOuderRelatief = str_replace(Leeftijd80ofOuderRelatief,",","."),
-         Leeftijd65tot80Relatief = as.double(Leeftijd65tot80Relatief),
-         Leeftijd80ofOuderRelatief = as.double(Leeftijd80ofOuderRelatief),
-         Provincie = as.factor(Provincie)) %>% 
+  # wat bewerkingen
+  mutate(Provincie = as.factor(Provincie)) %>% 
   mutate_if(is.character, as.numeric) %>% 
   # 2. Gebruik dagen ipv datums
   arrange(Datum) %>% 
   group_by(Provincie) %>% 
   mutate(Dag = row_number()) %>% 
   ungroup() %>% 
-  # 3. Bereken besmettingen per km2
+  # 3. Bereken besmettingen per miljoen inwoners
   group_by(Provincie,Dag) %>% 
-  mutate(BesmettingenPerKm2 = BesmettingenPerDag / (Bevolkingsdichtheid/100),
-         BesmettingenPerKm2 = as.integer(format(BesmettingenPerKm2, scientific = FALSE))) %>% 
+  mutate(BesmettingenPerMiljoen = (BesmettingenPerDag / TotaleBevolking) *1000000,
+         BesmettingenPerMiljoen = as.integer(format(BesmettingenPerMiljoen, scientific = FALSE))) %>% 
   ungroup() %>% 
   # 4. Bereken 7-daags voortschrijdend gemiddelde
   group_by(Provincie) %>% 
-  mutate(BesmettingenPerKm2_mva7 = roll_mean(BesmettingenPerKm2, 7, align="right", fill=0)) %>% 
+  mutate(BesmettingenPerDag_mva7 = roll_mean(BesmettingenPerDag, 7, align="right", fill=0),
+         BesmettingenPerMiljoen_mva7 = roll_mean(BesmettingenPerMiljoen, 7, align="right", fill=0)) %>% 
   ungroup() %>% 
   # 5. filter vanaf de lockdown en nummer de dagen
   arrange(Datum) %>% 
@@ -109,8 +102,8 @@ Provincie %>%
   mutate(DagLockdown = row_number()) %>% 
   ungroup() %>% 
   # order de factors zodat deze descending zijn op BesmettingenPerKm2 in de plot
-  mutate(Provincie = fct_reorder(Provincie, desc(BesmettingenPerKm2))) %>% 
-select(Datum,Dag,DagLockdown,Provincie,Besmettingen,BesmettingenPerDag,BesmettingenPerKm2,BesmettingenPerKm2_mva7,Bevolkingsdichtheid)
+  mutate(Provincie = fct_reorder(Provincie, desc(BesmettingenPerMiljoen))) %>% 
+select(Datum,Dag,DagLockdown,Provincie,Besmettingen,BesmettingenPerDag,BesmettingenPerDag_mva7,BesmettingenPerMiljoen,BesmettingenPerMiljoen_mva7,Bevolkingsdichtheid,TotaleBevolking)
 
 ```
 
@@ -118,7 +111,7 @@ Maak de gganimate plot
 ```{r}
 ProvincieLockdownChart <-
 ProvincieLockdown %>% 
-  ggplot(aes(DagLockdown,BesmettingenPerKm2_mva7, color = Bevolkingsdichtheid, group = 1)) +  
+  ggplot(aes(DagLockdown,BesmettingenPerMiljoen_mva7, color = Bevolkingsdichtheid, group = 1)) +  
   scale_y_sqrt() +
   geom_line() + 
   geom_point() +
@@ -126,12 +119,13 @@ ProvincieLockdown %>%
   scale_color_gradient2(midpoint = 750,low="green", 
                         mid="orange",
                         high="red") +
+  theme(legend.position = "bottom") +
   transition_reveal(along = DagLockdown) + ease_aes('cubic-in-out') +
   labs(title = "Positief gesteste personen op Covid-19 afgezet tegen het 
        aantal dagen ({frame_along}) sinds de intelligente lockdown op 23 maart",
-       subtitle = "7-daags moving average gecorrigeerd voor de bevolkingsdichtheid per provincie", 
-       x = "dagen",
-       y = "positief geteste personen per km2")
+       subtitle = "Besmettingen per dag, per 1 miljoen inwoners (7-daags moving average)", 
+       x = "dagen sinds lockdown",
+       y = "positief geteste personen per 1M inwoners")
 
 # maak de animatie
 animate(ProvincieLockdownChart, fps = 10, end_pause = 20)
@@ -143,8 +137,8 @@ anim_save("plots/ProvincieLockdownChart.gif")
 Maak de statische plot
 ```{r}
 ProvincieLockdown %>% 
-  ggplot(aes(DagLockdown,BesmettingenPerKm2_mva7, color = Bevolkingsdichtheid, group = 1)) +  
-  scale_y_sqrt() +
+  ggplot(aes(DagLockdown,BesmettingenPerMiljoen_mva7, color = Bevolkingsdichtheid, group = 1)) +  
+  scale_y_log10() +
   geom_line() + 
   #geom_point() +
   facet_wrap(~Provincie) +
@@ -153,9 +147,9 @@ ProvincieLockdown %>%
                         high="red") +
   labs(title = "Positief gesteste personen op Covid-19 afgezet tegen
        het aantal dagen sinds de intelligente lockdown op 23 maart",
-       subtitle = "7-daags moving average gecorrigeerd voor de bevolkingsdichtheid per provincie", 
-       x = "dagen",
-       y = "positief geteste personen per km2") 
+       subtitle = "Besmettingen per dag, per 1 miljoen inwoners (7-daags moving average)", 
+       x = "dagen sinds lockdown",
+       y = "positief geteste personen per 1M inwoners") 
 
 # Save statische plot
 ggsave("plots/ProvincieLockdownLineplot.png")
