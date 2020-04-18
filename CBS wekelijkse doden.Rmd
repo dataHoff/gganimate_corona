@@ -61,8 +61,8 @@ CBS_weekly_deaths %>%
   scale_fill_brewer() +
   theme(legend.title = element_blank(),
         panel.border = element_blank(),
-        legend.position = c(0.1, 0.09),
-        legend.text = element_text(size=6),
+        legend.position = c(0.25, 0.09),
+        legend.text = element_text(size=9),
         legend.key.size = unit(0.8,"line")) +
   labs(title = "Wekelijks geregistreerde sterfgevallen in vergelijking 
        tot het gemeentegemiddelde over week 1 t/m 10",
@@ -71,7 +71,7 @@ CBS_weekly_deaths %>%
   transition_states(Week) 
 
 # maak de animatie
-animate(CBS_weekly_deaths_plot, fps = 10, end_pause = 20)
+animate(CBS_weekly_deaths_plot, end_pause = 20)
 
 # Save gganimate plot
 anim_save("plots/CBS_weekly_deaths_plot.gif")
