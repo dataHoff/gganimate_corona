@@ -1,8 +1,6 @@
 
 Setup
 ```{r}
-if (!require("devtools")) install.packages("devtools") ; library(devtools)
-if (!require("coronavirus")) install_github("covid19r/coronavirus"); library(coronavirus)
 if (!require("tidyverse")) install.packages("tidyverse"); library(tidyverse)
 if (!require("readr")) install.packages("tidyverse"); library(readr)
 if (!require("gganimate")) install.packages("gganimate"); library(gganimate)

@@ -1,0 +1,80 @@
+
+Setup
+```{r message=FALSE, warning=FALSE}
+if (!require("tidyverse")) install.packages("tidyverse"); library(tidyverse)
+if (!require("gganimate")) install.packages("gganimate"); library(gganimate)
+if (!require("gifski")) install.packages("gifski"); library(gifski)
+if (!require("png")) install.packages("png"); library(png) 
+if (!require("sf")) install.packages("sf"); library(sf)
+if (!require("httr")) install.packages("httr"); library(httr) 
+
+# themeset voor ggplot
+theme_set(theme_bw())
+
+```
+
+Load dataset CBS 
+```{r message=FALSE, warning=FALSE}
+# https://www.cbs.nl/en-gb/news/2020/16/mortality-in-second-week-of-april-estimated-at-5-000
+CBS_weekly_deaths <-
+read_csv("data/deaths-registered-weekly*,-relative-to-the-municipality's-average-across-weeks-1-to-10.csv")
+```
+
+Load gemeentegrenzen
+```{r message=FALSE, warning=FALSE}
+url <- parse_url("https://opendata.arcgis.com/datasets/e1f0dd70abcb4fceabbc43412e43ad4b_0.geojson")
+request <- build_url(url)
+gemeenten <- st_read(request, stringsAsFactors = FALSE) 
+```
+
+Bewerkingen
+```{r}
+CBS_weekly_deaths <-
+CBS_weekly_deaths %>% 
+  pivot_longer(cols = starts_with("Week"), names_to = "Week", values_to = "RelatieveDoden") %>% 
+  mutate(Week = str_replace_all(Week,"Week ",""),
+         Week = as.integer(Week),
+         legenda = case_when(RelatieveDoden < 0.75 ~ "minder dan gemiddeld",
+                             RelatieveDoden >= 0.75 & RelatieveDoden < 1.25 ~ "gemiddeld",
+                             RelatieveDoden >= 1.25 & RelatieveDoden < 2 ~ "tot tweemaal gemiddelde",
+                             RelatieveDoden >= 2 & RelatieveDoden < 4 ~ "twee- tot viermaal gemiddelde",
+                              RelatieveDoden >= 4 ~ "meer dan viermaal gemiddeld"),
+         legenda = as.factor(legenda),
+         legenda = fct_reorder(legenda, RelatieveDoden))
+
+```
+
+Join datasets
+```{r}
+CBS_weekly_deaths <-
+gemeenten %>% 
+  left_join(CBS_weekly_deaths, by = c("Gemeentecode" = "statcode"))
+
+```
+
+Plot maken
+```{r}
+CBS_weekly_deaths_plot <-
+CBS_weekly_deaths %>% 
+  ggplot(aes(group = 1)) +
+  geom_sf(aes(fill = legenda), size = 0.2, color = "white") +
+  scale_fill_brewer() +
+  theme(legend.title = element_blank(),
+        panel.border = element_blank(),
+        legend.position = c(0.1, 0.09),
+        legend.text = element_text(size=6),
+        legend.key.size = unit(0.8,"line")) +
+  labs(title = "Wekelijks geregistreerde sterfgevallen in vergelijking 
+       tot het gemeentegemiddelde over week 1 t/m 10",
+       subtitle = "Week: {closest_state}") +
+  coord_sf(datum = NA) +
+  transition_states(Week) 
+
+# maak de animatie
+animate(CBS_weekly_deaths_plot, fps = 10, end_pause = 20)
+
+# Save gganimate plot
+anim_save("plots/CBS_weekly_deaths_plot.gif")
+
+```
+
